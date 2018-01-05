@@ -26,8 +26,8 @@ namespace Sprint.Filter.OData.Deserialize
             DateTimeOffset
         }
 
-        private static readonly CultureInfo ParseCulture = CultureInfo.InvariantCulture;        
-        private static readonly Regex GuidRegex = new Regex(@"([a-f0-9\-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);        
+        private static readonly CultureInfo ParseCulture = CultureInfo.InvariantCulture;
+        private static readonly Regex GuidRegex = new Regex(@"(^([0-9A-Fa-f]{8}[-][0-9A-Fa-f]{4}[-][0-9A-Fa-f]{4}[-][0-9A-Fa-f]{4}[-][0-9A-Fa-f]{12})$)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex TimeSpanRegex = new Regex(@"(P.+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private readonly string _source;
@@ -94,10 +94,21 @@ namespace Sprint.Filter.OData.Deserialize
                 case '(':
                 case ')':
                 case ',':
-                case ':':                    
-                        return ParseSyntax();                    
+                case ':':
+                    return ParseSyntax();
                 default:
-                    if (Char.IsNumber(c))
+                    if (isHex(c) && _offset + 36 <= _source.Length)
+                    {
+                        var parsedAsGuid = ParseGuidString(_source.Substring(_offset, 36));
+                        if (parsedAsGuid != null)
+                        {
+                            _offset += 36;
+                            _current = _offset;
+                            return parsedAsGuid;
+                        }
+                    }
+
+                    if (Char.IsNumber(c)) //It can be a number or a date
                     {
                         return ParseNumeric();
                     }
@@ -132,7 +143,7 @@ namespace Sprint.Filter.OData.Deserialize
 
             var value = TypeDescriptor.GetConverter(type).ConvertFromString(rawValue);
 
-            return ODataExpression.Constant(value);            
+            return ODataExpression.Constant(value);
         }
 
         private ODataConstantExpression ParseSpecialString(string value, StringType stringType)
@@ -198,20 +209,21 @@ namespace Sprint.Filter.OData.Deserialize
             return ODataExpression.Constant(dateTimeOffset);
         }
 
-        private ODataConstantExpression ParseGuidString(string value)
+        private ODataConstantExpression ParseGuidString(string value, bool isStrict = false)
         {
-            var match = GuidRegex.Match(value);
-
-            if (match.Success)
+            var match = GuidRegex.IsMatch(value);
+            if (match)
             {
                 Guid guid;
-                if (Guid.TryParse(match.Groups[1].Value, out guid))
+                if (Guid.TryParse(value, out guid))
                 {
                     return ODataExpression.Constant(guid);
                 }
             }
-
-            throw new FormatException(String.Format("Could not read '{0}' as Guid at {1}.", value, _offset));            
+            if (isStrict)
+                throw new FormatException(String.Format("Could not read '{0}' as Guid at {1}.", value, _offset));
+            else
+                return null;
         }
 
         private ODataConstantExpression ParseTimeString(string value)
@@ -228,7 +240,7 @@ namespace Sprint.Filter.OData.Deserialize
                 {
                     throw new FormatException("Could not read " + value + " as TimeSpan.");
                 }
-            }            
+            }
 
             throw new Exception(String.Format("Duration format is invalid at {0}.", _offset));
         }
@@ -314,12 +326,12 @@ namespace Sprint.Filter.OData.Deserialize
         {
             var floating = false;
             char c;
-
+            var canBeADateTime = false;
             for (_current++; _current < _source.Length; _current++)
             {
                 c = _source[_current];
 
-                if (c == '.')
+                if (c == '.' && !canBeADateTime)
                 {
                     if (floating)
                         break;
@@ -328,8 +340,11 @@ namespace Sprint.Filter.OData.Deserialize
                 }
                 else
                 {
-                    if (!Char.IsDigit(c))
+                    if (!Char.IsDigit(c) && c != '-' && c != 'T' && c != ':' && c != '.')
+                    {
+                        canBeADateTime = true;
                         break;
+                    }
                 }
             }
 
@@ -412,7 +427,11 @@ namespace Sprint.Filter.OData.Deserialize
                         value = long.Parse(text, ParseCulture);
                         _current++;
                         break;
-
+                    case 'Z':
+                        var dateTime = ParseSpecialString(text + c, StringType.DateTime);
+                        _current++;
+                        _offset = _current;
+                        return dateTime;
                     default:
                         if (floating || haveExponent)
                             value = double.Parse(text, ParseCulture);
@@ -447,6 +466,10 @@ namespace Sprint.Filter.OData.Deserialize
             return current;
         }
 
+        private bool isHex(char c)
+        {
+            return (new Regex("[A-Fa-f0-9]").IsMatch(c.ToString()));
+        }
         private bool IsIdentifierStartChar(char c)
         {
             // Definition for names taken from
@@ -455,7 +478,7 @@ namespace Sprint.Filter.OData.Deserialize
             // sign. This is for working with '$value' which has a
             // special meaning.
 
-            return c == '_' || c == '$' || c=='.' || Char.IsLetter(c);
+            return c == '_' || c == '$' || c == '.' || Char.IsLetter(c);
         }
         private bool IsIdentifierChar(char c)
         {
@@ -540,79 +563,83 @@ namespace Sprint.Filter.OData.Deserialize
                             }
 
                             if (stringType == StringType.None)
-                            {                                
+                            {
                                 var content = ParseString();
 
-                                return ParceValue(name, (string)content.Value);                                
+                                return ParceValue(name, (string)content.Value);
                             }
 
                             break;
                         }
                     case ':':
-                    {
-                        _offset++;
+                        {
+                            _offset++;
 
-                        var depth = 0;
+                            var depth = 0;
 
-                        var p = ODataExpression.Parameter(name);
+                            var p = ODataExpression.Parameter(name);
 
-                        var lp = new Dictionary<string, ODataParameterExpression>(lambdaParameters ?? new Dictionary<string, ODataParameterExpression>());
+                            var lp = new Dictionary<string, ODataParameterExpression>(lambdaParameters ?? new Dictionary<string, ODataParameterExpression>());
 
-                        lp[p.Name] = p;
+                            lp[p.Name] = p;
 
-                        var tokens = new List<ODataExpression>();
-                      
-                        while(true)
-                        {                            
-                            var token = GetNext(parameter, null, lp);
+                            var tokens = new List<ODataExpression>();
 
-                            if(token == null)
-                                break;
-
-                            if (token.NodeType == ExpressionType.Default)
+                            while (true)
                             {
-                                var syntaxExpressionToken = (ODataSyntaxExpression)token;
+                                var token = GetNext(parameter, null, lp);
 
-                                if(syntaxExpressionToken.Syntax == ',')
-                                {
-                                    _offset--;
+                                if (token == null)
                                     break;
-                                }
 
-                                if (syntaxExpressionToken.Syntax == '(')
-                                    depth++;
-
-                                if(syntaxExpressionToken.Syntax == ')')
+                                if (token.NodeType == ExpressionType.Default)
                                 {
-                                    if(depth == 0)
+                                    var syntaxExpressionToken = (ODataSyntaxExpression)token;
+
+                                    if (syntaxExpressionToken.Syntax == ',')
                                     {
                                         _offset--;
                                         break;
                                     }
 
-                                    depth--;
+                                    if (syntaxExpressionToken.Syntax == '(')
+                                        depth++;
+
+                                    if (syntaxExpressionToken.Syntax == ')')
+                                    {
+                                        if (depth == 0)
+                                        {
+                                            _offset--;
+                                            break;
+                                        }
+
+                                        depth--;
+                                    }
                                 }
+
+                                tokens.Add(token);
                             }
 
-                            tokens.Add(token);
+                            var body = CreateExpression(ConvertToRpn(tokens));
+
+                            var lambdaExpression = new ODataLambdaExpression
+                            {
+                                Parameters = new[] { p },
+                                Body = body
+                            };
+
+                            return lambdaExpression;
                         }
-
-                        var body = CreateExpression(ConvertToRpn(tokens));
-
-                        var lambdaExpression = new ODataLambdaExpression
-                        {
-                            Parameters = new[] { p },
-                            Body = body
-                        };                        
-                        
-                        return lambdaExpression;
-                    }
                     case '/':
                         {
                             _offset++;
 
                             if (lambdaParameters != null && lambdaParameters.ContainsKey(name) && parent == null)
                                 return ParseIdentifier(false, parameter, lambdaParameters[name], lambdaParameters);
+                            if (name.StartsWith("Ase.") && parent != null && name.Substring(4) == parent.ToString().Replace(parameter.ToString() + ".", ""))
+                            {
+                                return ParseIdentifier(false, parameter, parent, lambdaParameters);
+                            }
 
                             return ParseIdentifier(false, parameter, ODataExpression.PropertyOrField(name, parent ?? parameter), lambdaParameters);
                         }
@@ -621,14 +648,14 @@ namespace Sprint.Filter.OData.Deserialize
                             var depth = 0;
                             var comma = false;
                             var arguments = new List<ODataExpression>();
-                            var temp = new List<ODataExpression>();                            
+                            var temp = new List<ODataExpression>();
 
                             while (true)
                             {
                                 var token = GetNext(parameter, null, lambdaParameters);
 
                                 if (token == null)
-                                    break;                                
+                                    break;
                                 var syntax = token as ODataSyntaxExpression;
 
                                 if (syntax != null && syntax.Syntax == ',')
@@ -679,7 +706,7 @@ namespace Sprint.Filter.OData.Deserialize
                                             var tokens = ConvertToRpn(temp.ToArray());
 
                                             var expression = CreateExpression(tokens);
-                                            
+
 
                                             arguments.Add(expression);
                                         }
@@ -722,17 +749,17 @@ namespace Sprint.Filter.OData.Deserialize
             {
                 var expressionType = name.GetExpressionType();
 
-                if(name.IsUnaryOperator())
-                    return ODataExpression.MakeUnary(expressionType, null);                    
+                if (name.IsUnaryOperator())
+                    return ODataExpression.MakeUnary(expressionType, null);
 
-                if(name.IsArithmeticOperator() || name.IsLogicalOperator())
+                if (name.IsArithmeticOperator() || name.IsLogicalOperator())
                     return ODataExpression.MakeBinary(expressionType, null, null);
             }
 
-            if(parent == null && lambdaParameters != null && lambdaParameters.ContainsKey(name))
+            if (parent == null && lambdaParameters != null && lambdaParameters.ContainsKey(name))
                 return lambdaParameters[name];
 
-            if(name.Contains("."))
+            if (name.Contains("."))
             {
                 var type = GetType(name);
                 return ODataExpression.Constant(type);

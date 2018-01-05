@@ -19,20 +19,21 @@ namespace Sprint.Filter.OData.Deserialize
         private readonly IMemberNameProvider _memberNameProvider = new MemberNameProvider();
         private Expression VisitMember(ODataPropertyExpression node)
         {
-            if(node.Expression != null)
+            if (node.Expression != null)
             {
                 var expression = Visit(node.Expression);
 
                 var info = _memberNameProvider.ResolveAlias(expression.Type, node.Name);
 
-                if(info.MemberType == MemberTypes.Field)
+                if (info.MemberType == MemberTypes.Field)
                     return Expression.Field(expression, (FieldInfo)info);
 
-                if(info.MemberType == MemberTypes.Property)
-                    return  Expression.Property(expression, (PropertyInfo)info);                               
+                if (info.MemberType == MemberTypes.Property)
+                    return Expression.Property(expression, (PropertyInfo)info);
+
             }
 
-            throw new NotImplementedException();         
+            throw new NotImplementedException();
         }
 
         private Expression VisitUnary(ODataUnaryExpression node)
@@ -48,10 +49,10 @@ namespace Sprint.Filter.OData.Deserialize
 
             switch (functionName)
             {
-                case "substringof":
+                case "contains":
                     {
-                        var right = Visit(node.Arguments[1]);
-                        var left = Visit(node.Arguments[0]);
+                        var right = Visit(node.Arguments[0]);
+                        var left = Visit(node.Arguments[1]);
 
                         return Expression.Call(right, MethodProvider.ContainsMethod, new[] { left });
                     }
@@ -261,10 +262,10 @@ namespace Sprint.Filter.OData.Deserialize
                         var lambda = (LambdaExpression)VisitLambda((ODataLambdaExpression)node.Arguments[0], genericArguments[0]);
 
                         genericArguments.Add(lambda.ReturnType);
-                        
+
                         var type = context.Type.IsIQueryable() ? typeof(Queryable) : typeof(Enumerable);
 
-                        return Expression.Call(type, functionName, genericArguments.ToArray(), new [] { context, lambda });
+                        return Expression.Call(type, functionName, genericArguments.ToArray(), new[] { context, lambda });
                     }
                 case "any":
                 case "all":
@@ -295,115 +296,105 @@ namespace Sprint.Filter.OData.Deserialize
                         return Expression.Call(type, functionName, genericArguments, arguments.ToArray());
                     }
                 case "isof":
-                {
-                    if(node.Arguments.Length == 1)
                     {
-                        var parameter = _parameters.Select(x=>x.Value).FirstOrDefault();
-                        if(parameter != null)
+                        if (node.Arguments.Length == 1)
                         {
-                            var type = (Type)((ConstantExpression)Visit(node.Arguments[0])).Value;
+                            var parameter = _parameters.Select(x => x.Value).FirstOrDefault();
+                            if (parameter != null)
+                            {
+                                var type = (Type)((ConstantExpression)Visit(node.Arguments[0])).Value;
 
-                            return Expression.TypeIs(parameter, type);
+                                return Expression.TypeIs(parameter, type);
+                            }
                         }
+
+                        if (node.Arguments.Length == 2)
+                        {
+                            var arguments = node.Arguments.Select(Visit).ToArray();
+
+                            return Expression.TypeIs(arguments[0], (Type)((ConstantExpression)arguments[1]).Value);
+                        }
+
+                        throw new NotSupportedException(node.DebugView());
                     }
-
-                    if(node.Arguments.Length == 2)
-                    {
-                        var arguments = node.Arguments.Select(Visit).ToArray();
-
-                        return Expression.TypeIs(arguments[0], (Type)((ConstantExpression)arguments[1]).Value);
-                    }
-
-                    throw new NotSupportedException(node.DebugView());
-                }
                 case "cast":
-                {
-                    if (node.Arguments.Length == 1)
                     {
-                        var parameter = _parameters.Select(x => x.Value).FirstOrDefault();
-                        if (parameter != null)
+                        if (node.Arguments.Length == 1)
                         {
-                            var type = (Type)((ConstantExpression)Visit(node.Arguments[0])).Value;
+                            var parameter = _parameters.Select(x => x.Value).FirstOrDefault();
+                            if (parameter != null)
+                            {
+                                var type = (Type)((ConstantExpression)Visit(node.Arguments[0])).Value;
 
-                            return Expression.TypeAs(parameter, type);
+                                return Expression.TypeAs(parameter, type);
+                            }
                         }
-                    }
 
-                    if (node.Arguments.Length == 2)
+                        if (node.Arguments.Length == 2)
+                        {
+                            var arguments = node.Arguments.Select(Visit).ToArray();
+
+                            return Expression.TypeAs(arguments[0], (Type)((ConstantExpression)arguments[1]).Value);
+                        }
+
+                        throw new NotSupportedException(node.DebugView());
+                    }
+                case "substringof":
                     {
-                        var arguments = node.Arguments.Select(Visit).ToArray();
+                        var right = Visit(node.Arguments[1]);
+                        var left = Visit(node.Arguments[0]);
 
-                        return Expression.TypeAs(arguments[0], (Type)((ConstantExpression)arguments[1]).Value);
+                        return Expression.Call(right, MethodProvider.ContainsMethod, new[] { left });
                     }
-
-                    throw new NotSupportedException(node.DebugView());
-                }
-                case "contains":
-                {
-                    var context = Visit(node.Context);
-
-                    var genericArguments = context.Type.GetTypeGenericArguments();
-
-                    var argument = node.Arguments.Length == 0
-                        ? _parameters.Select(x => x.Value).First()
-                        : Visit(node.Arguments[0]);
-
-                    if(genericArguments[0].IsNullableType() && Nullable.GetUnderlyingType(genericArguments[0]) == argument.Type)
-                        argument = Expression.Convert(argument, genericArguments[0]);
-
-                    var type = context.Type.IsIQueryable() ? typeof(Queryable) : typeof(Enumerable);
-
-                    return Expression.Call(type, functionName, genericArguments, new [] { context, argument });
-                }
                 default:
-                {
-                    if(node.Context != null)
                     {
-                        var context = Visit(node.Context);
+                        if (node.Context != null)
+                        {
+                            var context = Visit(node.Context);
 
-                        var arguments = node.Arguments.Select(Visit).ToList();
+                            var arguments = node.Arguments.Select(Visit).ToList();
 
-                        var expr = ExpressionMethodBinder.Bind(context.Type, functionName, context, arguments.ToArray());
+                            var expr = ExpressionMethodBinder.Bind(context.Type, functionName, context, arguments.ToArray());
 
-                        if (expr == null)
-                            throw new Exception(String.Format("Can't find a method: {0}", node.DebugView()));
+                            if (expr == null)
+                                throw new Exception(String.Format("Can't find a method: {0}", node.DebugView()));
 
-                        return expr;
+                            return expr;
+                        }
+
+                        if (MethodProvider.UserFunctions.ContainsKey(node.MethodName))
+                        {
+                            var arguments = node.Arguments.Select(Visit).ToArray();
+
+                            var methodExpression = ExpressionMethodBinder.Bind(
+                                MethodProvider.UserFunctions[node.MethodName], node.MethodName, null, arguments);
+
+                            if (methodExpression == null)
+                                throw new Exception(String.Format("Can't find a method: {0}", node.DebugView()));
+
+                            return methodExpression;
+                        }
+
+                        throw new NotSupportedException(String.Format("Can't find a method: {0}", node.DebugView()));
                     }
-
-                    if (MethodProvider.UserFunctions.ContainsKey(node.MethodName))
-                    {
-                        var arguments = node.Arguments.Select(Visit).ToArray();
-
-                        var methodExpression = ExpressionMethodBinder.Bind(
-                            MethodProvider.UserFunctions[node.MethodName], node.MethodName, null, arguments);
-
-                        if (methodExpression == null)
-                            throw new Exception(String.Format("Can't find a method: {0}", node.DebugView()));
-
-                        return methodExpression;
-                    }
-
-                    throw new NotSupportedException(String.Format("Can't find a method: {0}", node.DebugView()));   
-                }                    
             }
         }
 
         private Expression VisitConstant(ODataConstantExpression node)
         {
-            return Expression.Constant(node.Value);                        
+            return Expression.Constant(node.Value);
         }
 
         private Expression VisitBinary(ODataBinaryExpression node)
         {
             var left = Visit(node.Left);
-            var right = Visit(node.Right);            
+            var right = Visit(node.Right);
 
             ExpressionHelper.BinaryExpressionArgumentConverter(ref left, ref right, node.NodeType);
 
-            if(left.Type == typeof(string) || right.Type == typeof(string))
+            if (left.Type == typeof(string) || right.Type == typeof(string))
             {
-                switch(node.NodeType)
+                switch (node.NodeType)
                 {
                     case ExpressionType.GreaterThan:
                     case ExpressionType.GreaterThanOrEqual:
@@ -415,12 +406,12 @@ namespace Sprint.Filter.OData.Deserialize
                 }
             }
 
-            return Expression.MakeBinary(node.NodeType, left, right);            
+            return Expression.MakeBinary(node.NodeType, left, right);
         }
 
         private Expression VisitParameter(ODataParameterExpression node, Type parameterType)
         {
-            if(_parameters.ContainsKey(node))
+            if (_parameters.ContainsKey(node))
                 return _parameters[node];
 
             return _parameters[node] = Expression.Parameter(parameterType, node.Name);
@@ -428,7 +419,7 @@ namespace Sprint.Filter.OData.Deserialize
 
         private Expression VisitLambda(ODataLambdaExpression node, Type parameterType = null)
         {
-            var param = node.Parameters.Select(p=>VisitParameter(p, parameterType)).Cast<ParameterExpression>().ToArray();
+            var param = node.Parameters.Select(p => VisitParameter(p, parameterType)).Cast<ParameterExpression>().ToArray();
 
             var body = Visit(node.Body);
 
@@ -437,15 +428,15 @@ namespace Sprint.Filter.OData.Deserialize
 
         private Expression Visit(ODataExpression expression)
         {
-            if(expression == null)
+            if (expression == null)
                 return null;
 
-            switch(expression.NodeType)
+            switch (expression.NodeType)
             {
                 case ExpressionType.Call:
                     return VisitMethodCall((ODataMethodCallExpression)expression);
-                case ExpressionType.Constant:                
-                    return VisitConstant((ODataConstantExpression)expression);                                    
+                case ExpressionType.Constant:
+                    return VisitConstant((ODataConstantExpression)expression);
                 case ExpressionType.Add:
                 case ExpressionType.Subtract:
                 case ExpressionType.Multiply:
@@ -458,12 +449,12 @@ namespace Sprint.Filter.OData.Deserialize
                 case ExpressionType.GreaterThan:
                 case ExpressionType.GreaterThanOrEqual:
                 case ExpressionType.NotEqual:
-                case ExpressionType.Equal:                
-                    return VisitBinary((ODataBinaryExpression)expression);                                    
-                case ExpressionType.Lambda:                
-                    return  VisitLambda((ODataLambdaExpression)expression);                                    
-                case ExpressionType.MemberAccess:                
-                    return VisitMember((ODataPropertyExpression)expression);                                    
+                case ExpressionType.Equal:
+                    return VisitBinary((ODataBinaryExpression)expression);
+                case ExpressionType.Lambda:
+                    return VisitLambda((ODataLambdaExpression)expression);
+                case ExpressionType.MemberAccess:
+                    return VisitMember((ODataPropertyExpression)expression);
                 case ExpressionType.Parameter:
                     return VisitParameter((ODataParameterExpression)expression, null);
                 case ExpressionType.Not:
@@ -478,11 +469,11 @@ namespace Sprint.Filter.OData.Deserialize
         {
             var lambda = (LambdaExpression)VisitLambda(expression, typeof(TModel));
 
-            return Expression.Lambda<Func<TModel, TResult>>(lambda.Body, lambda.Parameters);            
+            return Expression.Lambda<Func<TModel, TResult>>(lambda.Body, lambda.Parameters);
         }
 
         public LambdaExpression Translate(ODataLambdaExpression expression, Type modelType)
-        {            
+        {
             return (LambdaExpression)VisitLambda(expression, modelType);
         }
 
