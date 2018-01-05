@@ -108,9 +108,6 @@
     <Compile Include="OData\Util.cs" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\nuget-package\SprintFilterOData.nuspec">
-      <Link>nuget-package\SprintFilterOData.nuspec</Link>
-    </None>
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
