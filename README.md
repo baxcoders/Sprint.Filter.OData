@@ -12,5 +12,6 @@ The backward compatibility it's not fully granted.
 
 ## Example
 
- ```csharp Filter.Deserialize<Customer>("MyDate eq 2016-12-31T23:00:00.000Z");
+ ```csharp 
+ Filter.Deserialize<Customer>("MyDate eq 2016-12-31T23:00:00.000Z");
 //result: t => (t.MyDate == Convert(12/31/2016 23:00:00))
