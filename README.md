@@ -6,6 +6,6 @@ The backward compatibility it's not fully granted.
 
 ## Main changes
 
-⋅⋅* The deserializer supports datetime in OData v4 syntax.
-⋅⋅* The deserializer supports guid in OData v4 syntax.
-⋅⋅* The deserializer supports the function contains (the equivalent of substringof) defined in the OData v4 syntax.
+* The deserializer supports datetime in OData v4 syntax.
+* The deserializer supports guid in OData v4 syntax.
+* The deserializer supports the function contains (the equivalent of substringof) defined in the OData v4 syntax.
