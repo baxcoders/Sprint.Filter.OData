@@ -17,6 +17,7 @@ namespace Sprint.Filter.OData.Deserialize
         private static readonly Expression ZeroConstant = Expression.Constant(0);
         private readonly IDictionary<ODataParameterExpression, ParameterExpression> _parameters = new Dictionary<ODataParameterExpression, ParameterExpression>();
         private readonly IMemberNameProvider _memberNameProvider = new MemberNameProvider();
+        private Assembly KnownAssembly = null;
         private Expression VisitMember(ODataPropertyExpression node)
         {
             if (node.Expression != null)
@@ -297,23 +298,32 @@ namespace Sprint.Filter.OData.Deserialize
                     }
                 case "isof":
                     {
+                        //ParameterExpression parameter = null;
+                        Expression genericParameter = null;
+                        object typeName = null;
                         if (node.Arguments.Length == 1)
                         {
-                            var parameter = _parameters.Select(x => x.Value).FirstOrDefault();
-                            if (parameter != null)
-                            {
-                                var type = (Type)((ConstantExpression)Visit(node.Arguments[0])).Value;
-
-                                return Expression.TypeIs(parameter, type);
-                            }
+                            genericParameter = _parameters.Select(x => x.Value).FirstOrDefault();
+                            typeName = ((ConstantExpression)Visit(node.Arguments[0])).Value;
                         }
 
                         if (node.Arguments.Length == 2)
                         {
                             var arguments = node.Arguments.Select(Visit).ToArray();
-
-                            return Expression.TypeIs(arguments[0], (Type)((ConstantExpression)arguments[1]).Value);
+                            genericParameter = arguments[0];
+                            typeName = ((ConstantExpression)arguments[1]).Value;
                         }
+
+                        if (genericParameter != null)
+                        {
+                            var type = typeName is Type ? (Type)typeName : null;
+                            if (type == null && KnownAssembly != null)
+                            {
+                                type = KnownAssembly.GetType((string)typeName);
+                            }
+                            return Expression.TypeIs(genericParameter, type);
+                        }
+
 
                         throw new NotSupportedException(node.DebugView());
                     }
@@ -467,6 +477,7 @@ namespace Sprint.Filter.OData.Deserialize
 
         public Expression<Func<TModel, TResult>> Translate<TModel, TResult>(ODataLambdaExpression expression)
         {
+            KnownAssembly = typeof(TModel).Assembly;
             var lambda = (LambdaExpression)VisitLambda(expression, typeof(TModel));
 
             return Expression.Lambda<Func<TModel, TResult>>(lambda.Body, lambda.Parameters);
@@ -474,13 +485,13 @@ namespace Sprint.Filter.OData.Deserialize
 
         public LambdaExpression Translate(ODataLambdaExpression expression, Type modelType)
         {
+            KnownAssembly = modelType.Assembly;
             return (LambdaExpression)VisitLambda(expression, modelType);
         }
 
         public Expression<Func<TResult>> Translate<TResult>(ODataLambdaExpression expression)
         {
             expression.Parameters = new ODataParameterExpression[0];
-
             return (Expression<Func<TResult>>)VisitLambda(expression);
         }
     }
